@@ -70,7 +70,9 @@ Edit `config.json` to customize the behavior:
   "alarm_interval": "5m",
   "debounce_delay": "3s",
   "repeat_interval": "5m",
-  "alarm_sound_file": ""
+  "alarm_sound_file": "",
+  "alarm_volume": 100,
+  "verbose_logging": false
 }
 ```
 
@@ -79,6 +81,11 @@ Edit `config.json` to customize the behavior:
 - `debounce_delay`: Wait time after file change before processing (e.g., `"3s"`, `"5s"`)
 - `repeat_interval`: Time between repeat alarms (e.g., `"5m"`, `"10m"`)
 - `alarm_sound_file`: Path to custom audio file (empty string = system beep)
+- `alarm_volume`: Alarm volume level (0-100, default: 100)
+  - `100` = Full volume (as loud as system allows)
+  - `50` = Half volume
+  - `0` = Muted (no alarm sound)
+- `verbose_logging`: Enable detailed debug logging (`true` or `false`, default: `false`)
 
 **Time Format:**
 - Use Go duration format: `"5m"` (5 minutes), `"30s"` (30 seconds), `"1h"` (1 hour)
@@ -112,6 +119,32 @@ To use a custom alarm sound:
    }
    ```
 3. Restart the application (no rebuild needed!)
+
+### Verbose Logging
+
+By default, the application only logs important events (saves, backups, alarms). To see all file system events for debugging:
+
+1. Edit `config.json` and set `verbose_logging` to `true`:
+   ```json
+   {
+     "verbose_logging": true
+   }
+   ```
+2. Restart the application
+3. You'll now see detailed logs for every file event detected
+
+**Note:** The configuration is displayed on startup, so you can verify your settings are loaded correctly.
+
+### Alarm Volume
+
+Control the alarm volume with the `alarm_volume` setting:
+
+- **100** (default): Full volume - alarm plays at maximum system volume
+- **50**: Half volume - alarm plays at 50% of maximum
+- **25**: Quarter volume - quieter alarm
+- **0**: Muted - no alarm sound (useful for silent mode)
+
+**Note:** Volume control works best with custom audio files. System beep volume cannot be controlled and will be skipped if volume is set below 10.
 
 ## Usage
 

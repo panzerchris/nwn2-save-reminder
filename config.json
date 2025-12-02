@@ -2,5 +2,7 @@
   "alarm_interval": "5m",
   "debounce_delay": "3s",
   "repeat_interval": "5m",
-  "alarm_sound_file": ""
+  "alarm_sound_file": "",
+  "alarm_volume": 50,
+  "verbose_logging": false
 }

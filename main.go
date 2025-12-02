@@ -24,10 +24,12 @@ const (
 
 // Config holds all configuration settings
 type Config struct {
-	AlarmInterval  string `json:"alarm_interval"`  // Time before first alarm (e.g., "5m", "300s")
-	DebounceDelay  string `json:"debounce_delay"`  // Wait time after file change (e.g., "3s")
-	RepeatInterval string `json:"repeat_interval"`  // Time between repeat alarms (e.g., "5m")
-	AlarmSoundFile string `json:"alarm_sound_file"` // Path to audio file (empty = system beep)
+	AlarmInterval  string `json:"alarm_interval"`   // Time before first alarm (e.g., "5m", "300s")
+	DebounceDelay  string `json:"debounce_delay"`   // Wait time after file change (e.g., "3s")
+	RepeatInterval string `json:"repeat_interval"`   // Time between repeat alarms (e.g., "5m")
+	AlarmSoundFile string `json:"alarm_sound_file"`  // Path to audio file (empty = system beep)
+	AlarmVolume    int    `json:"alarm_volume"`     // Alarm volume (0-100, default: 100)
+	VerboseLogging bool   `json:"verbose_logging"`  // Enable verbose/debug logging
 }
 
 // DefaultConfig returns the default configuration
@@ -37,6 +39,8 @@ func DefaultConfig() Config {
 		DebounceDelay:  "3s",
 		RepeatInterval: "5m",
 		AlarmSoundFile: "",
+		AlarmVolume:    100,
+		VerboseLogging: false,
 	}
 }
 
@@ -50,6 +54,7 @@ type SaveReminder struct {
 	alarmActive    bool
 	debounceTimer  *time.Timer
 	config         Config
+	verbose        bool
 }
 
 func main() {
@@ -75,6 +80,9 @@ func main() {
 	log.Printf("Documents folder: %s", documentsPath)
 	log.Printf("Watching folder: %s", savesPath)
 	log.Printf("Configuration loaded from: %s", getConfigPath())
+	
+	// Print configuration
+	printConfig(config)
 	
 	// Check if folder exists
 	if _, err := os.Stat(savesPath); os.IsNotExist(err) {
@@ -110,6 +118,7 @@ func main() {
 		backupsPath: backupsPath,
 		watcher:     watcher,
 		config:      config,
+		verbose:     config.VerboseLogging,
 	}
 	
 	// Find the quicksave folder
@@ -157,7 +166,9 @@ func main() {
 	log.Printf("")
 	log.Printf("File watcher initialized. Waiting for save file changes...")
 	log.Printf("Press Ctrl+C to exit")
-	log.Printf("(Debug: All file events will be logged)")
+	if config.VerboseLogging {
+		log.Printf("(Verbose logging enabled: All file events will be logged)")
+	}
 	
 	// Set up signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -267,9 +278,38 @@ func loadConfig() (Config, error) {
 		config.RepeatInterval = "5m"
 	}
 	// AlarmSoundFile can be empty (uses system beep)
+	// Validate alarm volume (0-100)
+	if config.AlarmVolume < 0 {
+		config.AlarmVolume = 0
+	} else if config.AlarmVolume > 100 {
+		config.AlarmVolume = 100
+	}
+	// If volume is 0 (unset in JSON), default to 100
+	if config.AlarmVolume == 0 && config.AlarmSoundFile == "" {
+		// Only set to 100 if it's actually 0 and no sound file (might be intentional mute)
+		// But if it's 0 in JSON, it means user set it, so keep it
+	}
+	// VerboseLogging defaults to false if not set
 	
 	return config, nil
 }
+
+// printConfig prints the current configuration in a readable format
+func printConfig(config Config) {
+	log.Printf("")
+	log.Printf("=== Configuration ===")
+	log.Printf("Alarm Interval:    %s", config.AlarmInterval)
+	log.Printf("Debounce Delay:   %s", config.DebounceDelay)
+	log.Printf("Repeat Interval:   %s", config.RepeatInterval)
+	if config.AlarmSoundFile != "" {
+		log.Printf("Alarm Sound File: %s", config.AlarmSoundFile)
+	} else {
+		log.Printf("Alarm Sound File: (system beep)")
+	}
+	log.Printf("Alarm Volume:      %d%%", config.AlarmVolume)
+	log.Printf("Verbose Logging:   %v", config.VerboseLogging)
+	log.Printf("===================")
+	log.Printf("")
 
 // saveConfig saves the configuration to a JSON file
 func saveConfig(config Config) error {
@@ -344,15 +384,21 @@ func (sr *SaveReminder) processEvents() {
 				return
 			}
 			
-			// Log all file events for debugging
-			log.Printf("File event detected: %s (op: %s)", event.Name, event.Op.String())
+			// Log all file events for debugging (only if verbose)
+			if sr.verbose {
+				log.Printf("File event detected: %s (op: %s)", event.Name, event.Op.String())
+			}
 			
 			// Check if this event is related to the quicksave folder
 			if sr.isQuicksaveRelated(event.Name) {
-				log.Printf("Quicksave-related change detected: %s", event.Name)
+				if sr.verbose {
+					log.Printf("Quicksave-related change detected: %s", event.Name)
+				}
 				sr.handleQuicksaveChange(event)
 			} else {
-				log.Printf("Ignored (not quicksave): %s", filepath.Base(event.Name))
+				if sr.verbose {
+					log.Printf("Ignored (not quicksave): %s", filepath.Base(event.Name))
+				}
 			}
 			
 		case err, ok := <-sr.watcher.Errors:
@@ -585,6 +631,14 @@ func (sr *SaveReminder) triggerAlarm() {
 }
 
 func (sr *SaveReminder) playAlarmSound() {
+	// Check if volume is 0 (muted)
+	if sr.config.AlarmVolume == 0 {
+		if sr.verbose {
+			log.Printf("Alarm volume is 0, alarm is muted")
+		}
+		return
+	}
+	
 	if sr.config.AlarmSoundFile != "" {
 		// Try to find the audio file
 		// Supports both absolute paths and relative paths (relative to executable directory)
@@ -597,6 +651,12 @@ func (sr *SaveReminder) playAlarmSound() {
 	}
 	
 	// Default: Use system beep
+	// Note: System beep volume can't be easily controlled, but we can skip it if volume is very low
+	if sr.config.AlarmVolume < 10 {
+		// Very low volume, skip beep
+		return
+	}
+	
 	if runtime.GOOS == "windows" {
 		// Windows: Use PowerShell to play a beep
 		cmd := exec.Command("powershell", "-Command", "[console]::beep(800, 500)")
@@ -612,29 +672,57 @@ func (sr *SaveReminder) playAlarmSound() {
 
 func (sr *SaveReminder) playAudioFile(filePath string) {
 	if runtime.GOOS == "windows" {
-		// Windows: Use PowerShell SoundPlayer for WAV files (most reliable)
-		ext := strings.ToLower(filepath.Ext(filePath))
-		if ext == ".wav" {
-			// Use .NET SoundPlayer via PowerShell (works well for WAV files)
-			absPath, err := filepath.Abs(filePath)
-			if err != nil {
-				absPath = filePath
-			}
-			// Escape backslashes for PowerShell
-			absPath = strings.ReplaceAll(absPath, `\`, `\\`)
-			cmd := exec.Command("powershell", "-Command", fmt.Sprintf(`[System.Media.SoundPlayer]::new("%s").PlaySync()`, absPath))
-			if err := cmd.Run(); err != nil {
-				log.Printf("Error playing audio file: %v", err)
-			}
-		} else {
-			// For other formats (MP3, etc.), try using default program
-			cmd := exec.Command("cmd", "/C", "start", "/MIN", filePath)
-			if err := cmd.Run(); err != nil {
-				log.Printf("Error playing audio file: %v", err)
+		// Windows: Use PowerShell with Windows Media Player COM object for volume control
+		absPath, err := filepath.Abs(filePath)
+		if err != nil {
+			absPath = filePath
+		}
+		// Escape backslashes and quotes for PowerShell
+		absPath = strings.ReplaceAll(absPath, `\`, `\\`)
+		absPath = strings.ReplaceAll(absPath, `"`, `\"`)
+		
+		// Calculate volume (Windows Media Player uses 0-100)
+		volume := sr.config.AlarmVolume
+		if volume > 100 {
+			volume = 100
+		} else if volume < 0 {
+			volume = 0
+		}
+		
+		// Use Windows Media Player COM object for better volume control
+		// This works for WAV, MP3, and other formats
+		psScript := fmt.Sprintf(`
+$player = New-Object -ComObject WMPlayer.OCX
+$player.settings.volume = %d
+$player.URL = "%s"
+$player.controls.play()
+while ($player.playState -eq 3) {
+	Start-Sleep -Milliseconds 100
+}
+$player.controls.stop()
+$player.close()
+`, volume, absPath)
+		
+		cmd := exec.Command("powershell", "-Command", psScript)
+		if err := cmd.Run(); err != nil {
+			// Fallback: Try SoundPlayer for WAV files (no volume control)
+			ext := strings.ToLower(filepath.Ext(filePath))
+			if ext == ".wav" {
+				cmd = exec.Command("powershell", "-Command", fmt.Sprintf(`[System.Media.SoundPlayer]::new("%s").PlaySync()`, absPath))
+				if err := cmd.Run(); err != nil {
+					log.Printf("Error playing audio file: %v", err)
+				}
+			} else {
+				// For other formats, try default program (no volume control)
+				cmd = exec.Command("cmd", "/C", "start", "/MIN", filePath)
+				if err := cmd.Run(); err != nil {
+					log.Printf("Error playing audio file: %v", err)
+				}
 			}
 		}
 	} else {
 		// Unix-like: Use aplay, paplay, or similar
+		// Volume control would require additional tools
 		cmd := exec.Command("aplay", filePath)
 		if err := cmd.Run(); err != nil {
 			// Try alternative
