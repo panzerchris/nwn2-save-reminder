@@ -86,15 +86,52 @@ func main() {
 		watcher:     watcher,
 	}
 	
-	// Add the saves folder to watcher
+	// Find the quicksave folder
+	quicksaveFolder := filepath.Join(savesPath, quicksaveName)
+	if _, err := os.Stat(quicksaveFolder); os.IsNotExist(err) {
+		log.Printf("WARNING: Quicksave folder does not exist yet: %s", quicksaveFolder)
+		log.Printf("The watcher will start monitoring once the folder is created.")
+	} else {
+		log.Printf("Found quicksave folder: %s", quicksaveFolder)
+	}
+	
+	// Add both the saves folder (to detect new folders) and quicksave folder (to detect changes)
 	if err := watcher.Add(savesPath); err != nil {
-		log.Printf("ERROR: Failed to add folder to watcher: %v", err)
+		log.Printf("ERROR: Failed to add saves folder to watcher: %v", err)
 		pauseBeforeExit("")
 		os.Exit(1)
 	}
 	
+	// Also watch the quicksave folder if it exists (for changes within it)
+	if _, err := os.Stat(quicksaveFolder); err == nil {
+		if err := watcher.Add(quicksaveFolder); err != nil {
+			log.Printf("WARNING: Failed to add quicksave folder to watcher: %v", err)
+		} else {
+			log.Printf("Watching quicksave folder for changes")
+		}
+	}
+	
+	// List existing save folders for debugging
+	log.Printf("")
+	log.Printf("Current save folders:")
+	files, err := os.ReadDir(savesPath)
+	if err != nil {
+		log.Printf("Warning: Could not read folder contents: %v", err)
+	} else {
+		if len(files) == 0 {
+			log.Printf("  (folder is empty)")
+		} else {
+			for _, file := range files {
+				if file.IsDir() && file.Name() != backupFolderName {
+					log.Printf("  - %s (folder)", file.Name())
+				}
+			}
+		}
+	}
+	log.Printf("")
 	log.Printf("File watcher initialized. Waiting for save file changes...")
 	log.Printf("Press Ctrl+C to exit")
+	log.Printf("(Debug: All file events will be logged)")
 	
 	// Set up signal handling for graceful shutdown
 	sigChan := make(chan os.Signal, 1)
@@ -167,9 +204,15 @@ func (sr *SaveReminder) processEvents() {
 				return
 			}
 			
-			// Check if this is the quicksave file
-			if sr.isQuicksaveFile(event.Name) {
+			// Log all file events for debugging
+			log.Printf("File event detected: %s (op: %s)", event.Name, event.Op.String())
+			
+			// Check if this event is related to the quicksave folder
+			if sr.isQuicksaveRelated(event.Name) {
+				log.Printf("Quicksave-related change detected: %s", event.Name)
 				sr.handleQuicksaveChange(event)
+			} else {
+				log.Printf("Ignored (not quicksave): %s", filepath.Base(event.Name))
 			}
 			
 		case err, ok := <-sr.watcher.Errors:
@@ -191,14 +234,41 @@ func (sr *SaveReminder) cleanup() {
 	}
 }
 
-func (sr *SaveReminder) isQuicksaveFile(filePath string) bool {
-	fileName := filepath.Base(filePath)
-	// Check if filename starts with "000000 - quicksave"
-	return strings.HasPrefix(fileName, quicksaveName)
+func (sr *SaveReminder) isQuicksaveRelated(filePath string) bool {
+	// Check if the path contains the quicksave folder
+	// This handles both the folder itself and files within it
+	relPath, err := filepath.Rel(sr.savesPath, filePath)
+	if err != nil {
+		return false
+	}
+	
+	// Check if path starts with "000000 - quicksave" (the folder name)
+	parts := strings.Split(relPath, string(filepath.Separator))
+	if len(parts) > 0 && parts[0] == quicksaveName {
+		return true
+	}
+	
+	return false
 }
 
 func (sr *SaveReminder) handleQuicksaveChange(event fsnotify.Event) {
-	// Only process write/create events (not remove)
+	// Skip if it's the folder itself being created/removed (we want file changes inside)
+	info, err := os.Stat(event.Name)
+	if err == nil && info.IsDir() {
+		// If the quicksave folder was just created, add it to the watcher
+		if event.Op&fsnotify.Create != 0 {
+			quicksaveFolder := filepath.Join(sr.savesPath, quicksaveName)
+			if event.Name == quicksaveFolder {
+				log.Printf("Quicksave folder created, adding to watcher...")
+				if err := sr.watcher.Add(quicksaveFolder); err != nil {
+					log.Printf("Warning: Failed to add quicksave folder to watcher: %v", err)
+				}
+			}
+		}
+		return
+	}
+	
+	// Only process write/create events for files (not remove, not directories)
 	if event.Op&fsnotify.Write == 0 && event.Op&fsnotify.Create == 0 {
 		return
 	}
@@ -210,23 +280,23 @@ func (sr *SaveReminder) handleQuicksaveChange(event fsnotify.Event) {
 	
 	// Start debounce timer
 	sr.debounceTimer = time.AfterFunc(debounceDelay, func() {
-		sr.processQuicksave(event.Name)
+		sr.processQuicksave(filepath.Join(sr.savesPath, quicksaveName))
 	})
 	
-	log.Printf("Detected change to quicksave file, waiting %v before processing...", debounceDelay)
+	log.Printf("Detected change in quicksave folder, waiting %v before processing...", debounceDelay)
 }
 
-func (sr *SaveReminder) processQuicksave(filePath string) {
-	log.Printf("Processing quicksave: %s", filePath)
+func (sr *SaveReminder) processQuicksave(quicksaveFolderPath string) {
+	log.Printf("Processing quicksave folder: %s", quicksaveFolderPath)
 	
-	// Check if file exists (might have been deleted)
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
-		log.Printf("File no longer exists, skipping backup")
+	// Check if folder exists
+	if _, err := os.Stat(quicksaveFolderPath); os.IsNotExist(err) {
+		log.Printf("Quicksave folder no longer exists, skipping backup")
 		return
 	}
 	
-	// Create backup
-	if err := sr.createBackup(filePath); err != nil {
+	// Create backup of the entire folder
+	if err := sr.createBackup(quicksaveFolderPath); err != nil {
 		log.Printf("Error creating backup: %v", err)
 		return
 	}
@@ -242,39 +312,72 @@ func (sr *SaveReminder) processQuicksave(filePath string) {
 	sr.startAlarmTimer()
 }
 
-func (sr *SaveReminder) createBackup(filePath string) error {
-	// Get file info to check if it's actually a file (not a directory)
-	info, err := os.Stat(filePath)
-	if err != nil {
-		return err
-	}
-	if info.IsDir() {
-		return fmt.Errorf("path is a directory, not a file")
-	}
-	
+func (sr *SaveReminder) createBackup(quicksaveFolderPath string) error {
 	// Create timestamp folder
 	timestamp := time.Now().Format("2006-01-02_15-04-05")
-	timestampFolder := filepath.Join(sr.backupsPath, timestamp)
-	if err := os.MkdirAll(timestampFolder, 0755); err != nil {
-		return fmt.Errorf("error creating timestamp folder: %v", err)
+	backupFolderName := fmt.Sprintf("%s - %s", timestamp, quicksaveName)
+	destFolder := filepath.Join(sr.backupsPath, backupFolderName)
+	
+	if err := os.MkdirAll(destFolder, 0755); err != nil {
+		return fmt.Errorf("error creating backup folder: %v", err)
 	}
 	
-	// Copy file to backup location
-	fileName := filepath.Base(filePath)
-	destPath := filepath.Join(timestampFolder, fileName)
+	// Copy the entire quicksave folder recursively
+	return sr.copyDirectory(quicksaveFolderPath, destFolder)
+}
+
+func (sr *SaveReminder) copyDirectory(src, dst string) error {
+	// Get source info
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return fmt.Errorf("error reading source: %v", err)
+	}
 	
+	// Create destination directory
+	if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
+		return fmt.Errorf("error creating destination directory: %v", err)
+	}
+	
+	// Read source directory
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return fmt.Errorf("error reading source directory: %v", err)
+	}
+	
+	// Copy each entry
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		
+		if entry.IsDir() {
+			// Recursively copy subdirectories
+			if err := sr.copyDirectory(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			// Copy file
+			if err := sr.copyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+	}
+	
+	log.Printf("Backup created: %s", dst)
+	return nil
+}
+
+func (sr *SaveReminder) copyFile(src, dst string) error {
 	// Read source file
-	data, err := os.ReadFile(filePath)
+	data, err := os.ReadFile(src)
 	if err != nil {
 		return fmt.Errorf("error reading source file: %v", err)
 	}
 	
 	// Write to destination
-	if err := os.WriteFile(destPath, data, 0644); err != nil {
+	if err := os.WriteFile(dst, data, 0644); err != nil {
 		return fmt.Errorf("error writing backup file: %v", err)
 	}
 	
-	log.Printf("Backup created: %s", destPath)
 	return nil
 }
 
