@@ -5,9 +5,11 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -42,19 +44,30 @@ func main() {
 	
 	// Check if folder exists
 	if _, err := os.Stat(savesPath); os.IsNotExist(err) {
-		log.Fatalf("Error: Saves folder does not exist: %s", savesPath)
+		log.Printf("ERROR: Saves folder does not exist: %s", savesPath)
+		log.Printf("")
+		log.Printf("Please make sure:")
+		log.Printf("1. Neverwinter Nights 2 has been launched at least once")
+		log.Printf("2. You have created a multiplayer save at least once")
+		log.Printf("3. The folder path is correct")
+		pauseBeforeExit("")
+		os.Exit(1)
 	}
 	
 	// Create backups folder
 	backupsPath := filepath.Join(savesPath, backupFolderName)
 	if err := os.MkdirAll(backupsPath, 0755); err != nil {
-		log.Fatalf("Error creating backups folder: %v", err)
+		log.Printf("ERROR: Failed to create backups folder: %v", err)
+		pauseBeforeExit("")
+		os.Exit(1)
 	}
 	
 	// Create watcher
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		log.Fatalf("Error creating file watcher: %v", err)
+		log.Printf("ERROR: Failed to create file watcher: %v", err)
+		pauseBeforeExit("")
+		os.Exit(1)
 	}
 	defer watcher.Close()
 	
@@ -66,14 +79,46 @@ func main() {
 	
 	// Add the saves folder to watcher
 	if err := watcher.Add(savesPath); err != nil {
-		log.Fatalf("Error adding folder to watcher: %v", err)
+		log.Printf("ERROR: Failed to add folder to watcher: %v", err)
+		pauseBeforeExit("")
+		os.Exit(1)
 	}
 	
 	log.Printf("File watcher initialized. Waiting for save file changes...")
 	log.Printf("Press Ctrl+C to exit")
 	
-	// Process events
-	reminder.processEvents()
+	// Set up signal handling for graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+	
+	// Process events in a goroutine
+	go reminder.processEvents()
+	
+	// Wait for interrupt signal
+	<-sigChan
+	log.Printf("")
+	log.Printf("Shutting down...")
+	reminder.cleanup()
+	log.Printf("Goodbye!")
+	pauseBeforeExit("")
+}
+
+// pauseBeforeExit pauses execution so the user can read error messages
+// when running as a double-clickable executable on Windows
+func pauseBeforeExit(message string) {
+	if runtime.GOOS == "windows" {
+		if message != "" {
+			fmt.Println("")
+			fmt.Println(message)
+		}
+		// Use cmd to pause (works even when double-clicked)
+		// The pause command will print its own "Press any key to continue . . ." message
+		cmd := exec.Command("cmd", "/C", "pause")
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Run()
+	}
 }
 
 func (sr *SaveReminder) processEvents() {
@@ -95,6 +140,16 @@ func (sr *SaveReminder) processEvents() {
 			}
 			log.Printf("Watcher error: %v", err)
 		}
+	}
+}
+
+func (sr *SaveReminder) cleanup() {
+	// Stop all timers
+	sr.resetAlarmTimers()
+	
+	// Close watcher
+	if sr.watcher != nil {
+		sr.watcher.Close()
 	}
 }
 
