@@ -99,7 +99,7 @@ Edit `config.json` to customize the behavior:
   - `"alarm.wav"` - looks for `alarm.wav` in the same directory as the executable
   - `"sounds\\alarm.wav"` - looks in a `sounds` subdirectory relative to the executable
   - `"C:\\Sounds\\alarm.wav"` - absolute path (Windows)
-  - `"D:/Audio/alarm.wav"` - absolute path (alternative Windows format)
+  - `"D:/Audio/notify.mp3"` - absolute path (alternative Windows format)
 
 ### Custom Audio File
 
