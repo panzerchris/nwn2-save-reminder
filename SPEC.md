@@ -1,0 +1,7 @@
+- Needs to run on Windows
+- Must compile to a single executable
+- Should watch the My Documents\Neverwinter Nights 2\saves\multiplayer folder for changes
+- When 000000 - quicksave it should wait a few seconds, then copy to a subfolder folder called backups\timestampofchange - 000000 - quicksave
+- After a change, it should start a timer. after 5 minutes it plays an audio file to alert to need to quick save again
+- Alarm repeats every X minutes there after until save is made which resets the timer
+- Can output logs to a terminal windowH
