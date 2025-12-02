@@ -186,6 +186,49 @@ func getConfigPath() string {
 	return filepath.Join(exeDir, configFileName)
 }
 
+// getExecutableDir returns the directory where the executable is located
+func getExecutableDir() string {
+	exePath, err := os.Executable()
+	if err != nil {
+		// Fallback to current directory
+		wd, _ := os.Getwd()
+		return wd
+	}
+	return filepath.Dir(exePath)
+}
+
+// resolveSoundPath resolves the sound file path, supporting both absolute and relative paths
+// Relative paths are resolved relative to the executable directory
+func (sr *SaveReminder) resolveSoundPath(path string) string {
+	// If path is empty, return empty
+	if path == "" {
+		return ""
+	}
+	
+	// Check if it's an absolute path (works on both Windows and Unix)
+	if filepath.IsAbs(path) {
+		// Try absolute path as-is
+		if _, err := os.Stat(path); err == nil {
+			return path
+		}
+		return ""
+	}
+	
+	// Relative path - try relative to executable directory first (most common case)
+	exeDir := getExecutableDir()
+	relativePath := filepath.Join(exeDir, path)
+	if _, err := os.Stat(relativePath); err == nil {
+		return relativePath
+	}
+	
+	// Also try relative to current working directory (for command-line usage)
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+	
+	return ""
+}
+
 // loadConfig loads configuration from a JSON file, or creates a default one if it doesn't exist
 func loadConfig() (Config, error) {
 	configPath := getConfigPath()
@@ -543,9 +586,11 @@ func (sr *SaveReminder) triggerAlarm() {
 
 func (sr *SaveReminder) playAlarmSound() {
 	if sr.config.AlarmSoundFile != "" {
-		// Play custom audio file
-		if _, err := os.Stat(sr.config.AlarmSoundFile); err == nil {
-			sr.playAudioFile(sr.config.AlarmSoundFile)
+		// Try to find the audio file
+		// Supports both absolute paths and relative paths (relative to executable directory)
+		soundPath := sr.resolveSoundPath(sr.config.AlarmSoundFile)
+		if soundPath != "" {
+			sr.playAudioFile(soundPath)
 			return
 		}
 		log.Printf("Warning: Audio file not found: %s, using system beep instead", sr.config.AlarmSoundFile)

@@ -84,6 +84,16 @@ Edit `config.json` to customize the behavior:
 - Use Go duration format: `"5m"` (5 minutes), `"30s"` (30 seconds), `"1h"` (1 hour)
 - Examples: `"5m"`, `"300s"`, `"10m"`, `"1h30m"`
 
+**Sound File Path:**
+- Supports both absolute and relative paths
+- **Relative paths** are resolved relative to the executable directory (where `nwn2-save-reminder.exe` is located)
+- **Absolute paths** work as-is (e.g., `"C:\\Sounds\\alarm.wav"`)
+- Examples:
+  - `"alarm.wav"` - looks for `alarm.wav` in the same directory as the executable
+  - `"sounds\\alarm.wav"` - looks in a `sounds` subdirectory relative to the executable
+  - `"C:\\Sounds\\alarm.wav"` - absolute path (Windows)
+  - `"D:/Audio/alarm.wav"` - absolute path (alternative Windows format)
+
 ### Custom Audio File
 
 To use a custom alarm sound:
