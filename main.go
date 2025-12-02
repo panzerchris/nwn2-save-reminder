@@ -310,6 +310,7 @@ func printConfig(config Config) {
 	log.Printf("Verbose Logging:   %v", config.VerboseLogging)
 	log.Printf("===================")
 	log.Printf("")
+}
 
 // saveConfig saves the configuration to a JSON file
 func saveConfig(config Config) error {
