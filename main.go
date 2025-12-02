@@ -36,10 +36,19 @@ type SaveReminder struct {
 }
 
 func main() {
+	// Get the Documents folder path (handles custom locations)
+	documentsPath, err := getDocumentsFolder()
+	if err != nil {
+		log.Printf("WARNING: Could not determine Documents folder, using default: %v", err)
+		// Fallback to standard location
+		documentsPath = filepath.Join(os.Getenv("USERPROFILE"), "Documents")
+	}
+	
 	// Get the saves folder path
-	savesPath := filepath.Join(os.Getenv("USERPROFILE"), "Documents", "Neverwinter Nights 2", "saves", "multiplayer")
+	savesPath := filepath.Join(documentsPath, "Neverwinter Nights 2", "saves", "multiplayer")
 	
 	log.Printf("NWN2 Save Reminder starting...")
+	log.Printf("Documents folder: %s", documentsPath)
 	log.Printf("Watching folder: %s", savesPath)
 	
 	// Check if folder exists
@@ -101,6 +110,35 @@ func main() {
 	reminder.cleanup()
 	log.Printf("Goodbye!")
 	pauseBeforeExit("")
+}
+
+// getDocumentsFolder gets the actual Documents folder path on Windows
+// This handles cases where the Documents folder has been moved to a custom location
+func getDocumentsFolder() (string, error) {
+	if runtime.GOOS != "windows" {
+		// On non-Windows, use standard home directory
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(homeDir, "Documents"), nil
+	}
+	
+	// On Windows, use PowerShell to get the actual Documents folder path
+	// This uses the Windows Shell API to get the real location, even if moved
+	cmd := exec.Command("powershell", "-Command", "[Environment]::GetFolderPath('MyDocuments')")
+	output, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("failed to get Documents folder: %v", err)
+	}
+	
+	// Clean up the output (remove newlines and whitespace)
+	path := strings.TrimSpace(string(output))
+	if path == "" {
+		return "", fmt.Errorf("Documents folder path is empty")
+	}
+	
+	return path, nil
 }
 
 // pauseBeforeExit pauses execution so the user can read error messages
