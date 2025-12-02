@@ -179,7 +179,11 @@ Each backup folder contains a timestamp of when the save was made.
 - Check that the quicksave file name starts with "000000 - quicksave"
 - Verify the terminal window shows "File watcher initialized" message
 
+## Credits
+
+Default notification sound effect by [Universfield](https://pixabay.com/users/universfield-28281460/?utm_source=link-attribution&utm_medium=referral&utm_campaign=music&utm_content=326127) from [Pixabay](https://pixabay.com//?utm_source=link-attribution&utm_medium=referral&utm_campaign=music&utm_content=326127).
+
 ## License
 
-This is a personal utility tool. Use at your own discretion.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
