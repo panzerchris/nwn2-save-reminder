@@ -1,0 +1,6 @@
+{
+  "alarm_interval": "5m",
+  "debounce_delay": "3s",
+  "repeat_interval": "5m",
+  "alarm_sound_file": ""
+}

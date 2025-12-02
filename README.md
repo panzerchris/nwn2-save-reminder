@@ -51,23 +51,57 @@ If a pre-built executable is available, simply run `nwn2-save-reminder.exe`.
 
 ## Configuration
 
-You can customize the behavior by editing the constants in `main.go`:
+The application uses a `config.json` file in the same directory as the executable. On first run, a default configuration file will be created automatically.
 
-- `alarmInterval`: Time before first alarm (default: 5 minutes)
-- `repeatInterval`: Time between repeat alarms (default: 5 minutes)
-- `debounceDelay`: Wait time after file change before processing (default: 3 seconds)
-- `alarmSoundFile`: Path to custom audio file (empty = system beep)
+### Config File Location
 
-## Custom Audio File
+The config file is created in the same directory as the executable:
+```
+nwn2-save-reminder.exe
+config.json
+```
+
+### Configuration Options
+
+Edit `config.json` to customize the behavior:
+
+```json
+{
+  "alarm_interval": "5m",
+  "debounce_delay": "3s",
+  "repeat_interval": "5m",
+  "alarm_sound_file": ""
+}
+```
+
+**Settings:**
+- `alarm_interval`: Time before first alarm (e.g., `"5m"`, `"300s"`, `"10m"`)
+- `debounce_delay`: Wait time after file change before processing (e.g., `"3s"`, `"5s"`)
+- `repeat_interval`: Time between repeat alarms (e.g., `"5m"`, `"10m"`)
+- `alarm_sound_file`: Path to custom audio file (empty string = system beep)
+
+**Time Format:**
+- Use Go duration format: `"5m"` (5 minutes), `"30s"` (30 seconds), `"1h"` (1 hour)
+- Examples: `"5m"`, `"300s"`, `"10m"`, `"1h30m"`
+
+### Custom Audio File
 
 To use a custom alarm sound:
 
-1. Place a WAV file in the same directory as the executable
-2. Edit `main.go` and set `alarmSoundFile` to the file path:
-   ```go
-   const alarmSoundFile = "alarm.wav"
+1. Place a WAV file (MP3 also works) in the same directory as the executable, or provide a full path
+2. Edit `config.json` and set `alarm_sound_file`:
+   ```json
+   {
+     "alarm_sound_file": "alarm.wav"
+   }
    ```
-3. Rebuild the application
+   Or use an absolute path:
+   ```json
+   {
+     "alarm_sound_file": "C:\\Sounds\\alarm.wav"
+   }
+   ```
+3. Restart the application (no rebuild needed!)
 
 ## Usage
 

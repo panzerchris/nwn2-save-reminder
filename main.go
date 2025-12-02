@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -18,11 +19,26 @@ import (
 const (
 	quicksaveName    = "000000 - quicksave"
 	backupFolderName = "backups"
-	alarmInterval    = 5 * time.Minute
-	debounceDelay    = 3 * time.Second
-	repeatInterval   = 5 * time.Minute
-	alarmSoundFile   = "" // Empty = use system beep, or set path to WAV/MP3 file
+	configFileName   = "config.json"
 )
+
+// Config holds all configuration settings
+type Config struct {
+	AlarmInterval  string `json:"alarm_interval"`  // Time before first alarm (e.g., "5m", "300s")
+	DebounceDelay  string `json:"debounce_delay"`  // Wait time after file change (e.g., "3s")
+	RepeatInterval string `json:"repeat_interval"`  // Time between repeat alarms (e.g., "5m")
+	AlarmSoundFile string `json:"alarm_sound_file"` // Path to audio file (empty = system beep)
+}
+
+// DefaultConfig returns the default configuration
+func DefaultConfig() Config {
+	return Config{
+		AlarmInterval:  "5m",
+		DebounceDelay:  "3s",
+		RepeatInterval: "5m",
+		AlarmSoundFile: "",
+	}
+}
 
 type SaveReminder struct {
 	savesPath      string
@@ -33,9 +49,17 @@ type SaveReminder struct {
 	repeatTimer    *time.Ticker
 	alarmActive    bool
 	debounceTimer  *time.Timer
+	config         Config
 }
 
 func main() {
+	// Load configuration
+	config, err := loadConfig()
+	if err != nil {
+		log.Printf("WARNING: Could not load config, using defaults: %v", err)
+		config = DefaultConfig()
+	}
+	
 	// Get the Documents folder path (handles custom locations)
 	documentsPath, err := getDocumentsFolder()
 	if err != nil {
@@ -50,6 +74,7 @@ func main() {
 	log.Printf("NWN2 Save Reminder starting...")
 	log.Printf("Documents folder: %s", documentsPath)
 	log.Printf("Watching folder: %s", savesPath)
+	log.Printf("Configuration loaded from: %s", getConfigPath())
 	
 	// Check if folder exists
 	if _, err := os.Stat(savesPath); os.IsNotExist(err) {
@@ -84,6 +109,7 @@ func main() {
 		savesPath:   savesPath,
 		backupsPath: backupsPath,
 		watcher:     watcher,
+		config:      config,
 	}
 	
 	// Find the quicksave folder
@@ -147,6 +173,77 @@ func main() {
 	reminder.cleanup()
 	log.Printf("Goodbye!")
 	pauseBeforeExit("")
+}
+
+// getConfigPath returns the path to the config file (in the same directory as the executable)
+func getConfigPath() string {
+	exePath, err := os.Executable()
+	if err != nil {
+		// Fallback to current directory
+		return configFileName
+	}
+	exeDir := filepath.Dir(exePath)
+	return filepath.Join(exeDir, configFileName)
+}
+
+// loadConfig loads configuration from a JSON file, or creates a default one if it doesn't exist
+func loadConfig() (Config, error) {
+	configPath := getConfigPath()
+	
+	// Check if config file exists
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		// Create default config file
+		defaultConfig := DefaultConfig()
+		if err := saveConfig(defaultConfig); err != nil {
+			return defaultConfig, fmt.Errorf("failed to create default config file: %v", err)
+		}
+		log.Printf("Created default config file: %s", configPath)
+		return defaultConfig, nil
+	}
+	
+	// Read config file
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return DefaultConfig(), fmt.Errorf("failed to read config file: %v", err)
+	}
+	
+	// Parse JSON
+	var config Config
+	if err := json.Unmarshal(data, &config); err != nil {
+		return DefaultConfig(), fmt.Errorf("failed to parse config file: %v", err)
+	}
+	
+	// Validate and set defaults for empty values
+	if config.AlarmInterval == "" {
+		config.AlarmInterval = "5m"
+	}
+	if config.DebounceDelay == "" {
+		config.DebounceDelay = "3s"
+	}
+	if config.RepeatInterval == "" {
+		config.RepeatInterval = "5m"
+	}
+	// AlarmSoundFile can be empty (uses system beep)
+	
+	return config, nil
+}
+
+// saveConfig saves the configuration to a JSON file
+func saveConfig(config Config) error {
+	configPath := getConfigPath()
+	
+	// Marshal to JSON with indentation for readability
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %v", err)
+	}
+	
+	// Write to file
+	if err := os.WriteFile(configPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write config file: %v", err)
+	}
+	
+	return nil
 }
 
 // getDocumentsFolder gets the actual Documents folder path on Windows
@@ -278,6 +375,13 @@ func (sr *SaveReminder) handleQuicksaveChange(event fsnotify.Event) {
 		sr.debounceTimer.Stop()
 	}
 	
+	// Parse debounce delay from config
+	debounceDelay, err := time.ParseDuration(sr.config.DebounceDelay)
+	if err != nil {
+		log.Printf("Warning: Invalid debounce_delay in config, using 3s: %v", err)
+		debounceDelay = 3 * time.Second
+	}
+	
 	// Start debounce timer
 	sr.debounceTimer = time.AfterFunc(debounceDelay, func() {
 		sr.processQuicksave(filepath.Join(sr.savesPath, quicksaveName))
@@ -395,7 +499,14 @@ func (sr *SaveReminder) resetAlarmTimers() {
 }
 
 func (sr *SaveReminder) startAlarmTimer() {
-	// Start the initial 5-minute timer
+	// Parse alarm interval from config
+	alarmInterval, err := time.ParseDuration(sr.config.AlarmInterval)
+	if err != nil {
+		log.Printf("Warning: Invalid alarm_interval in config, using 5m: %v", err)
+		alarmInterval = 5 * time.Minute
+	}
+	
+	// Start the initial alarm timer
 	sr.alarmTimer = time.AfterFunc(alarmInterval, func() {
 		sr.triggerAlarm()
 		sr.startRepeatAlarm()
@@ -406,6 +517,14 @@ func (sr *SaveReminder) startAlarmTimer() {
 
 func (sr *SaveReminder) startRepeatAlarm() {
 	sr.alarmActive = true
+	
+	// Parse repeat interval from config
+	repeatInterval, err := time.ParseDuration(sr.config.RepeatInterval)
+	if err != nil {
+		log.Printf("Warning: Invalid repeat_interval in config, using 5m: %v", err)
+		repeatInterval = 5 * time.Minute
+	}
+	
 	// Start repeating alarm
 	sr.repeatTimer = time.NewTicker(repeatInterval)
 	go func() {
@@ -423,13 +542,13 @@ func (sr *SaveReminder) triggerAlarm() {
 }
 
 func (sr *SaveReminder) playAlarmSound() {
-	if alarmSoundFile != "" {
+	if sr.config.AlarmSoundFile != "" {
 		// Play custom audio file
-		if _, err := os.Stat(alarmSoundFile); err == nil {
-			sr.playAudioFile(alarmSoundFile)
+		if _, err := os.Stat(sr.config.AlarmSoundFile); err == nil {
+			sr.playAudioFile(sr.config.AlarmSoundFile)
 			return
 		}
-		log.Printf("Warning: Audio file not found: %s, using system beep instead", alarmSoundFile)
+		log.Printf("Warning: Audio file not found: %s, using system beep instead", sr.config.AlarmSoundFile)
 	}
 	
 	// Default: Use system beep
