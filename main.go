@@ -14,6 +14,11 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/gopxl/beep"
+	"github.com/gopxl/beep/mp3"
+	"github.com/gopxl/beep/speaker"
+	"github.com/gopxl/beep/wav"
+	"github.com/gopxl/beep/effects"
 )
 
 const (
@@ -45,16 +50,17 @@ func DefaultConfig() Config {
 }
 
 type SaveReminder struct {
-	savesPath      string
-	backupsPath    string
-	watcher        *fsnotify.Watcher
-	lastSaveTime   time.Time
-	alarmTimer     *time.Timer
-	repeatTimer    *time.Ticker
-	alarmActive    bool
-	debounceTimer  *time.Timer
-	config         Config
-	verbose        bool
+	savesPath         string
+	backupsPath       string
+	watcher           *fsnotify.Watcher
+	lastSaveTime      time.Time
+	alarmTimer        *time.Timer
+	repeatTimer       *time.Ticker
+	alarmActive       bool
+	debounceTimer     *time.Timer
+	config            Config
+	verbose           bool
+	speakerInitialized bool
 }
 
 func main() {
@@ -168,6 +174,20 @@ func main() {
 	log.Printf("Press Ctrl+C to exit")
 	if config.VerboseLogging {
 		log.Printf("(Verbose logging enabled: All file events will be logged)")
+	}
+	
+	// Initialize alarm timer on startup
+	// If quicksave folder exists, check its modification time to determine last save time
+	if info, err := os.Stat(quicksaveFolder); err == nil {
+		// Quicksave folder exists, use its modification time as last save time
+		reminder.lastSaveTime = info.ModTime()
+		log.Printf("Quicksave folder found, last modified: %s", reminder.lastSaveTime.Format("2006-01-02 15:04:05"))
+		reminder.startAlarmTimer()
+	} else {
+		// No quicksave folder yet, start timer from now
+		reminder.lastSaveTime = time.Now()
+		log.Printf("No quicksave folder yet, alarm timer will start from now")
+		reminder.startAlarmTimer()
 	}
 	
 	// Set up signal handling for graceful shutdown
@@ -645,10 +665,12 @@ func (sr *SaveReminder) playAlarmSound() {
 		// Supports both absolute paths and relative paths (relative to executable directory)
 		soundPath := sr.resolveSoundPath(sr.config.AlarmSoundFile)
 		if soundPath != "" {
+			log.Printf("Playing alarm sound: %s", soundPath)
 			sr.playAudioFile(soundPath)
 			return
 		}
-		log.Printf("Warning: Audio file not found: %s, using system beep instead", sr.config.AlarmSoundFile)
+		log.Printf("Warning: Audio file not found: %s (searched: executable dir and current dir)", sr.config.AlarmSoundFile)
+		log.Printf("  Make sure the file exists and the path is correct")
 	}
 	
 	// Default: Use system beep
@@ -672,66 +694,83 @@ func (sr *SaveReminder) playAlarmSound() {
 }
 
 func (sr *SaveReminder) playAudioFile(filePath string) {
-	if runtime.GOOS == "windows" {
-		// Windows: Use PowerShell with Windows Media Player COM object for volume control
-		absPath, err := filepath.Abs(filePath)
+	// Verify file exists
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		log.Printf("Error: Audio file does not exist: %s", filePath)
+		return
+	}
+
+	// Open the audio file
+	f, err := os.Open(filePath)
+	if err != nil {
+		log.Printf("Error opening audio file: %v", err)
+		return
+	}
+	defer f.Close()
+
+	// Decode the audio file based on extension
+	var streamer beep.StreamSeekCloser
+	var format beep.Format
+	ext := strings.ToLower(filepath.Ext(filePath))
+
+	switch ext {
+	case ".wav":
+		streamer, format, err = wav.Decode(f)
+	case ".mp3":
+		streamer, format, err = mp3.Decode(f)
+	default:
+		log.Printf("Warning: Unsupported audio format '%s'. Supported formats: WAV, MP3", ext)
+		return
+	}
+
+	if err != nil {
+		log.Printf("Error decoding audio file: %v", err)
+		return
+	}
+	defer streamer.Close()
+
+	// Initialize speaker if not already done
+	if !sr.speakerInitialized {
+		// Initialize with the sample rate from the audio file
+		err := speaker.Init(format.SampleRate, format.SampleRate.N(time.Second/10))
 		if err != nil {
-			absPath = filePath
+			log.Printf("Error initializing speaker: %v", err)
+			return
 		}
-		// Escape backslashes and quotes for PowerShell
-		absPath = strings.ReplaceAll(absPath, `\`, `\\`)
-		absPath = strings.ReplaceAll(absPath, `"`, `\"`)
-		
-		// Calculate volume (Windows Media Player uses 0-100)
-		volume := sr.config.AlarmVolume
-		if volume > 100 {
-			volume = 100
-		} else if volume < 0 {
-			volume = 0
-		}
-		
-		// Use Windows Media Player COM object for better volume control
-		// This works for WAV, MP3, and other formats
-		psScript := fmt.Sprintf(`
-$player = New-Object -ComObject WMPlayer.OCX
-$player.settings.volume = %d
-$player.URL = "%s"
-$player.controls.play()
-while ($player.playState -eq 3) {
-	Start-Sleep -Milliseconds 100
-}
-$player.controls.stop()
-$player.close()
-`, volume, absPath)
-		
-		cmd := exec.Command("powershell", "-Command", psScript)
-		if err := cmd.Run(); err != nil {
-			// Fallback: Try SoundPlayer for WAV files (no volume control)
-			ext := strings.ToLower(filepath.Ext(filePath))
-			if ext == ".wav" {
-				cmd = exec.Command("powershell", "-Command", fmt.Sprintf(`[System.Media.SoundPlayer]::new("%s").PlaySync()`, absPath))
-				if err := cmd.Run(); err != nil {
-					log.Printf("Error playing audio file: %v", err)
-				}
-			} else {
-				// For other formats, try default program (no volume control)
-				cmd = exec.Command("cmd", "/C", "start", "/MIN", filePath)
-				if err := cmd.Run(); err != nil {
-					log.Printf("Error playing audio file: %v", err)
-				}
-			}
-		}
-	} else {
-		// Unix-like: Use aplay, paplay, or similar
-		// Volume control would require additional tools
-		cmd := exec.Command("aplay", filePath)
-		if err := cmd.Run(); err != nil {
-			// Try alternative
-			cmd = exec.Command("paplay", filePath)
-			if err := cmd.Run(); err != nil {
-				log.Printf("Error playing audio file: %v", err)
-			}
+		sr.speakerInitialized = true
+		if sr.verbose {
+			log.Printf("Speaker initialized (sample rate: %d Hz)", format.SampleRate)
 		}
 	}
+
+	// Calculate volume (beep uses a logarithmic scale)
+	// Volume range: 0-100 (config) -> -5 to 0 (beep, in decibels)
+	// 0% = silent (-5 or less), 100% = full volume (0)
+	volumePercent := float64(sr.config.AlarmVolume)
+	if volumePercent < 0 {
+		volumePercent = 0
+	} else if volumePercent > 100 {
+		volumePercent = 100
+	}
+
+	// Convert percentage to decibels: 0% = -10dB (nearly silent), 100% = 0dB (full)
+	volumeDB := -10.0 + (volumePercent / 100.0 * 10.0)
+
+	// Apply volume control
+	volume := &effects.Volume{
+		Streamer: streamer,
+		Base:     2,
+		Volume:   volumeDB,
+		Silent:   volumePercent < 1, // Mute if less than 1%
+	}
+
+	// Play and wait for completion
+	done := make(chan bool)
+	speaker.Play(beep.Seq(volume, beep.Callback(func() {
+		done <- true
+	})))
+
+	<-done
+	log.Printf("Audio played successfully (%s, volume: %d%%)", filepath.Base(filePath), sr.config.AlarmVolume)
 }
 

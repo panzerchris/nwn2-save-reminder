@@ -80,7 +80,7 @@ Edit `config.json` to customize the behavior:
 - `alarm_interval`: Time before first alarm (e.g., `"5m"`, `"300s"`, `"10m"`)
 - `debounce_delay`: Wait time after file change before processing (e.g., `"3s"`, `"5s"`)
 - `repeat_interval`: Time between repeat alarms (e.g., `"5m"`, `"10m"`)
-- `alarm_sound_file`: Path to custom audio file (empty string = system beep)
+- `alarm_sound_file`: Path to audio file (empty string = system beep, supports WAV and MP3 formats)
 - `alarm_volume`: Alarm volume level (0-100, default: 100)
   - `100` = Full volume (as loud as system allows)
   - `50` = Half volume
@@ -105,7 +105,7 @@ Edit `config.json` to customize the behavior:
 
 To use a custom alarm sound:
 
-1. Place a WAV file (MP3 also works) in the same directory as the executable, or provide a full path
+1. Place a WAV or MP3 audio file in the same directory as the executable, or provide a full path
 2. Edit `config.json` and set `alarm_sound_file`:
    ```json
    {
@@ -115,7 +115,7 @@ To use a custom alarm sound:
    Or use an absolute path:
    ```json
    {
-     "alarm_sound_file": "C:\\Sounds\\alarm.wav"
+     "alarm_sound_file": "C:\\Sounds\\alarm.mp3"
    }
    ```
 3. Restart the application (no rebuild needed!)
