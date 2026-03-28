@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -61,6 +62,8 @@ type SaveReminder struct {
 	config            Config
 	verbose           bool
 	speakerInitialized bool
+	mu                sync.Mutex // protects pendingSince
+	pendingSince      time.Time  // time of first detected change in current debounce session; zero when none pending
 }
 
 func main() {
@@ -484,6 +487,15 @@ func (sr *SaveReminder) handleQuicksaveChange(event fsnotify.Event) {
 	if sr.debounceTimer != nil {
 		sr.debounceTimer.Stop()
 	}
+
+	// Mark a save as pending, anchored to the first detection in this session.
+	// We only set this when zero so that continuous file events don't keep
+	// extending the window — the grace period is bounded from first detection.
+	sr.mu.Lock()
+	if sr.pendingSince.IsZero() {
+		sr.pendingSince = time.Now()
+	}
+	sr.mu.Unlock()
 	
 	// Parse debounce delay from config
 	debounceDelay, err := time.ParseDuration(sr.config.DebounceDelay)
@@ -502,7 +514,13 @@ func (sr *SaveReminder) handleQuicksaveChange(event fsnotify.Event) {
 
 func (sr *SaveReminder) processQuicksave(quicksaveFolderPath string) {
 	log.Printf("Processing quicksave folder: %s", quicksaveFolderPath)
-	
+
+	// Clear the pending flag regardless of outcome. On failure paths the existing
+	// alarm timer is still running, so alarms will fire normally once this clears.
+	sr.mu.Lock()
+	sr.pendingSince = time.Time{}
+	sr.mu.Unlock()
+
 	// Check if folder exists
 	if _, err := os.Stat(quicksaveFolderPath); os.IsNotExist(err) {
 		log.Printf("Quicksave folder no longer exists, skipping backup")
@@ -645,9 +663,26 @@ func (sr *SaveReminder) startRepeatAlarm() {
 }
 
 func (sr *SaveReminder) triggerAlarm() {
-	log.Printf("*** ALARM: Time to save! It's been %v since last save. ***", time.Since(sr.lastSaveTime))
-	
-	// Play alarm sound
+	// Suppress the alarm if a save was recently detected but not yet processed.
+	// The grace window is debounceDelay + 10s. Crucially, pendingSince is anchored
+	// to the *first* detection in a session (not reset on every event), so continuous
+	// file writes cannot extend this window indefinitely — it always expires.
+	debounceDelay, err := time.ParseDuration(sr.config.DebounceDelay)
+	if err != nil {
+		debounceDelay = 3 * time.Second
+	}
+	graceWindow := debounceDelay + 10*time.Second
+
+	sr.mu.Lock()
+	pendingSince := sr.pendingSince
+	sr.mu.Unlock()
+
+	if !pendingSince.IsZero() && time.Since(pendingSince) < graceWindow {
+		log.Printf("Alarm suppressed: save detected %v ago, still within grace window (%v)", time.Since(pendingSince).Round(time.Millisecond), graceWindow)
+		return
+	}
+
+	log.Printf("*** ALARM: Time to save! It's been %v since last save. ***", time.Since(sr.lastSaveTime).Round(time.Second))
 	sr.playAlarmSound()
 }
 
